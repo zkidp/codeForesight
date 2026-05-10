@@ -1,0 +1,13 @@
+{
+  "name": "codepr",
+  "version": "0.1.0",
+  "description": "Requirement-driven progress board with three-layer token/effort estimator and design-vs-implementation diff view.",
+  "author": "codePR",
+  "commands": "./commands",
+  "hooks": "./hooks/hooks.json",
+  "statusLine": {
+    "type": "command",
+    "command": "node ${CLAUDE_PLUGIN_ROOT}/statusline.js",
+    "padding": 0
+  }
+}

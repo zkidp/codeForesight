@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>codePR — Project Progress</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="/style.css" />
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@13/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/markdown-it-task-lists@2/dist/markdown-it-task-lists.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1"></script>
+</head>
+<body>
+<header>
+  <div class="brand">📋 codePR</div>
+  <div class="topstats">
+    <span id="topReqCount">0 reqs</span>
+    <span id="topTokens">0 / 0 tok</span>
+    <span id="topAccuracy">accuracy: —</span>
+  </div>
+</header>
+<nav class="topnav">
+  <div class="navtab" data-view="overview">📊 Overview</div>
+  <div class="navtab active" data-view="reqs">📋 Requirements</div>
+</nav>
+<main>
+  <aside id="reqList"></aside>
+  <section id="detail">
+    <div class="placeholder">Select a requirement on the left.</div>
+  </section>
+</main>
+<section id="overview" class="overview-view" hidden>
+  <div id="overviewSummary" class="overview-summary"></div>
+  <div class="chart-card">
+    <canvas id="projectBurnupCanvas"></canvas>
+  </div>
+  <div class="chart-row">
+    <div class="chart-card">
+      <canvas id="cfdCanvas"></canvas>
+    </div>
+    <div class="chart-card">
+      <canvas id="calibrationCanvas"></canvas>
+    </div>
+  </div>
+  <div class="chart-card chart-gantt">
+    <canvas id="ganttCanvas"></canvas>
+  </div>
+</section>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
