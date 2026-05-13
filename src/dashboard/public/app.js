@@ -1,7 +1,6 @@
 import { drawProjectBurnup, drawReqBurnup, drawCalibration, drawCFD, drawGantt } from '/charts.js';
 
 const md = window.markdownit({ html: true, linkify: true, breaks: false }).use(window.markdownitTaskLists);
-mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
 
 const state = {
   view: 'reqs',
@@ -10,8 +9,68 @@ const state = {
   data: null,
   audit: null,
   detail: null,
-  charts: { project: null, req: null, calibration: null, cfd: null, gantt: null }
+  charts: { project: null, req: null, calibration: null, cfd: null, gantt: null },
+  lang: 'zh',
+  theme: 'dark',
+  locales: { zh: {}, en: {} }
 };
+
+// 启动时拉 CC 主题 + locales
+async function bootSettings() {
+  try {
+    const cfg = await fetchJSON('/api/settings');
+    state.locales = cfg.locales || { zh: {}, en: {} };
+    state.lang = (localStorage.getItem('codeforesight.lang') || cfg.lang || 'zh');
+    let theme = localStorage.getItem('codeforesight.theme') || cfg.theme || 'dark';
+    if (theme === 'system') {
+      theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    state.theme = theme;
+    applyLangAndTheme();
+  } catch (e) { console.error('boot settings', e); }
+}
+
+function t(key, params) {
+  const dict = state.locales[state.lang] || {};
+  const fallback = state.locales.zh || {};
+  let s = dict[key] != null ? dict[key] : (fallback[key] != null ? fallback[key] : key);
+  if (params) for (const [k, v] of Object.entries(params)) {
+    s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), String(v));
+  }
+  return s;
+}
+window.__T__ = t;
+
+function applyLangAndTheme() {
+  document.documentElement.lang = state.lang;
+  document.documentElement.dataset.theme = state.theme;
+  mermaid.initialize({ startOnLoad: false, theme: state.theme === 'light' ? 'default' : 'dark', securityLevel: 'loose' });
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === state.lang));
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === state.theme));
+  // 触发图表重绘
+  if (state.view === 'overview') refreshOverview();
+  if (state.selectedId) renderDetail();
+  renderTopStats();
+  renderReqList();
+}
+
+document.querySelectorAll('.lang-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    state.lang = b.dataset.lang;
+    try { localStorage.setItem('codeforesight.lang', state.lang); } catch {}
+    applyLangAndTheme();
+  });
+});
+document.querySelectorAll('.theme-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    state.theme = b.dataset.theme;
+    try { localStorage.setItem('codeforesight.theme', state.theme); } catch {}
+    applyLangAndTheme();
+  });
+});
 
 const STATUS_ORDER = ['in_progress', 'backlog', 'done'];
 
@@ -57,16 +116,16 @@ function renderOverviewSummary(s, c, cfdSummary) {
   const el = document.getElementById('overviewSummary');
   if (!el || !s) return;
   const calibStat = c && c.n > 0
-    ? `<div class="stat"><div class="num">${c.accuracy}%</div><div class="lbl">Estimate accuracy (n=${c.n})</div></div>`
-    : `<div class="stat"><div class="num">—</div><div class="lbl">Accuracy (need history)</div></div>`;
+    ? `<div class="stat"><div class="num">${c.accuracy}%</div><div class="lbl">${t('dashboard.stat.accuracy')} (n=${c.n})</div></div>`
+    : `<div class="stat"><div class="num">—</div><div class="lbl">${t('dashboard.stat.accuracy_need_history')}</div></div>`;
   const wipStat = cfdSummary
-    ? `<div class="stat ${cfdSummary.wipWarning ? 'warn' : ''}"><div class="num">${cfdSummary.in_progress}</div><div class="lbl">In progress${cfdSummary.wipWarning ? ' ⚠️' : ''}</div></div>`
+    ? `<div class="stat ${cfdSummary.wipWarning ? 'warn' : ''}"><div class="num">${cfdSummary.in_progress}</div><div class="lbl">${cfdSummary.wipWarning ? t('dashboard.stat.in_progress_warn') : t('dashboard.stat.in_progress')}</div></div>`
     : '';
   el.innerHTML = `
-    <div class="stat"><div class="num">${s.reqsDone}/${s.reqsTotal}</div><div class="lbl">Requirements done</div></div>
+    <div class="stat"><div class="num">${s.reqsDone}/${s.reqsTotal}</div><div class="lbl">${t('dashboard.stat.reqs_done')}</div></div>
     ${wipStat}
-    <div class="stat"><div class="num">${fmtK(s.actualTokens)}</div><div class="lbl">Actual tokens</div></div>
-    <div class="stat"><div class="num">${fmtK(s.estimatedRange[0])}–${fmtK(s.estimatedRange[1])}</div><div class="lbl">Estimated tokens</div></div>
+    <div class="stat"><div class="num">${fmtK(s.actualTokens)}</div><div class="lbl">${t('dashboard.stat.actual_tokens')}</div></div>
+    <div class="stat"><div class="num">${fmtK(s.estimatedRange[0])}–${fmtK(s.estimatedRange[1])}</div><div class="lbl">${t('dashboard.stat.estimated_range')}</div></div>
     ${calibStat}
   `;
 }
@@ -89,8 +148,9 @@ async function refreshDetail() {
 }
 
 function renderTopStats() {
+  if (!state.data) return;
   const reqs = state.data?.requirements || [];
-  document.getElementById('topReqCount').textContent = `${reqs.length} reqs`;
+  document.getElementById('topReqCount').textContent = t('report.req_card.chip_requirements', { n: reqs.length });
   const totalEst = reqs.reduce((s, r) => s + (r.estimate?.combined?.tokens?.[1] || 0), 0);
   const totalAct = reqs.reduce((s, r) => s + (r.actual?.tokens || 0), 0);
   document.getElementById('topTokens').textContent = `${fmtK(totalAct)} / ${fmtK(totalEst)} tok`;
@@ -101,18 +161,24 @@ function renderTopStats() {
     return e && h.actual_tokens >= e.tokens?.[0] && h.actual_tokens <= e.tokens?.[1];
   }).length;
   document.getElementById('topAccuracy').textContent =
-    history.length ? `accuracy: ${Math.round(hits / history.length * 100)}% (${hits}/${history.length})` : 'accuracy: —';
+    history.length ? `${t('dashboard.stat.accuracy')}: ${Math.round(hits / history.length * 100)}% (${hits}/${history.length})` : `${t('dashboard.stat.accuracy_need_history')}`;
 }
 
 function renderReqList() {
+  if (!state.data) return;
   const reqs = (state.data?.requirements || []).slice();
   const groups = { in_progress: [], backlog: [], done: [] };
   for (const r of reqs) (groups[r.status] || groups.backlog).push(r);
   const wrap = document.getElementById('reqList');
+  const groupLabels = {
+    in_progress: t('dashboard.kanban.in_progress'),
+    backlog: t('dashboard.kanban.backlog'),
+    done: t('dashboard.kanban.done')
+  };
   wrap.innerHTML = STATUS_ORDER.map(g => {
     const items = groups[g];
     if (!items.length) return '';
-    return `<div class="kanban-group">${g.replace('_', ' ')} · ${items.length}</div>` +
+    return `<div class="kanban-group">${groupLabels[g]} · ${items.length}</div>` +
       items.map(r => renderCard(r)).join('');
   }).join('');
   for (const el of wrap.querySelectorAll('.req-card')) {
@@ -149,24 +215,24 @@ function setTab(tab) {
 
 function renderDetail() {
   const det = document.getElementById('detail');
-  if (!state.detail) { det.innerHTML = '<div class="placeholder">Loading...</div>'; return; }
+  if (!state.detail) { det.innerHTML = `<div class="placeholder">${t('dashboard.empty.loading')}</div>`; return; }
   const r = state.detail.requirement;
   const prd = state.detail.prd;
 
   const tabs = ['design', 'audit', 'estimate', 'history'];
   det.innerHTML = `
     <div class="detail-head">
-      <h1>${esc(r.title)} <span style="font-size:13px;color:#8b949e;font-weight:400">(${r.id})</span></h1>
+      <h1>${esc(r.title)} <span style="font-size:13px;color:var(--text-muted);font-weight:400">(${r.id})</span></h1>
       <div class="meta">
-        <span>status: ${r.status}</span>
-        <span>progress: ${r.progress || 0}%</span>
-        <span>priority: ${r.priority || 'P2'}</span>
-        ${(r.tags || []).map(t => `<span>#${esc(t)}</span>`).join('')}
-        <span>PRD: ${esc(r.file || '—')}</span>
+        <span>${t('dashboard.detail.meta.status', { v: r.status })}</span>
+        <span>${t('dashboard.detail.meta.progress', { v: r.progress || 0 })}</span>
+        <span>${t('dashboard.detail.meta.priority', { v: r.priority || 'P2' })}</span>
+        ${(r.tags || []).map(tg => `<span>#${esc(tg)}</span>`).join('')}
+        <span>${t('dashboard.detail.meta.prd', { v: esc(r.file || '—') })}</span>
       </div>
     </div>
     <div class="tabs">
-      ${tabs.map(t => `<div class="tab ${state.activeTab === t ? 'active' : ''}" data-tab="${t}">${tabLabel(t)}</div>`).join('')}
+      ${tabs.map(tab => `<div class="tab ${state.activeTab === tab ? 'active' : ''}" data-tab="${tab}">${tabLabel(tab)}</div>`).join('')}
     </div>
     <div class="tab-content" id="tabContent"></div>
   `;
@@ -180,12 +246,17 @@ function renderDetail() {
   else if (state.activeTab === 'history') renderHistoryTab(c, r);
 }
 
-function tabLabel(t) {
-  return { design: 'Design Doc', audit: 'Design ↔ Reality', estimate: 'Estimate', history: 'History' }[t];
+function tabLabel(tab) {
+  return {
+    design: t('dashboard.tab.design'),
+    audit: t('dashboard.tab.audit'),
+    estimate: t('dashboard.tab.estimate'),
+    history: t('dashboard.tab.history')
+  }[tab];
 }
 
 function renderDesignTab(c, r, prd) {
-  if (!prd || prd.error) { c.innerHTML = `<div class="placeholder">No PRD available${prd?.error ? `: ${esc(prd.error)}` : ''}.</div>`; return; }
+  if (!prd || prd.error) { c.innerHTML = `<div class="placeholder">${t('dashboard.detail.no_prd')}${prd?.error ? `: ${esc(prd.error)}` : ''}.</div>`; return; }
   const html = md.render(prd.body || '');
   c.innerHTML = `<div class="markdown-body">${html}</div>`;
   for (const el of c.querySelectorAll('pre code')) {
@@ -207,20 +278,20 @@ function renderDesignTab(c, r, prd) {
 }
 
 function renderAuditTab(c, r) {
-  if (!state.audit) { c.innerHTML = '<div class="placeholder">No audit data. Run /audit ' + r.id + '</div>'; return; }
+  if (!state.audit) { c.innerHTML = `<div class="placeholder">${t('dashboard.detail.no_audit', { id: r.id })}</div>`; return; }
   const a = state.audit;
   c.innerHTML = `
     <div class="audit-summary">
-      <div class="audit-stat matched"><div class="num">${a.summary.matched}</div><div class="lbl">Matched</div></div>
-      <div class="audit-stat missing"><div class="num">${a.summary.missing}</div><div class="lbl">Missing</div></div>
-      <div class="audit-stat deviation"><div class="num">${a.summary.deviations}</div><div class="lbl">Deviations</div></div>
-      <div class="audit-stat"><div class="num">${a.summary.completion}%</div><div class="lbl">Completion</div></div>
+      <div class="audit-stat matched"><div class="num">${a.summary.matched}</div><div class="lbl">${t('report.audit.matched')}</div></div>
+      <div class="audit-stat missing"><div class="num">${a.summary.missing}</div><div class="lbl">${t('report.audit.missing')}</div></div>
+      <div class="audit-stat deviation"><div class="num">${a.summary.deviations}</div><div class="lbl">${t('report.audit.deviations')}</div></div>
+      <div class="audit-stat"><div class="num">${a.summary.completion}%</div><div class="lbl">${t('report.audit.completion')}</div></div>
     </div>
     ${renderAuditMermaid(r)}
-    ${renderAuditSection('Routes', a.routes, formatRoute)}
-    ${renderAuditSection('Handlers', a.handlers, formatNamed)}
-    ${renderAuditSection('Hooks', a.hooks, formatNamed)}
-    ${renderAuditSection('DB Models', a.db_models, formatNamed)}
+    ${renderAuditSection(t('report.audit.section.routes'), a.routes, formatRoute)}
+    ${renderAuditSection(t('report.audit.section.handlers'), a.handlers, formatNamed)}
+    ${renderAuditSection(t('report.audit.section.hooks'), a.hooks, formatNamed)}
+    ${renderAuditSection(t('report.audit.section.db_models'), a.db_models, formatNamed)}
   `;
   applyMermaidStateColoring();
 }
@@ -289,28 +360,28 @@ function formatRoute(x) { return `<code>${esc(x.method || 'ANY')} ${esc(x.path)}
 function formatNamed(x) { return `<code>${esc(x.name || JSON.stringify(x.ref))}</code>${x.deviation ? ' — ' + esc(x.deviation) : ''}`; }
 
 function renderEstimateTab(c, r) {
-  if (!r.estimate) { c.innerHTML = '<div class="placeholder">No estimate. Run /estimate ' + r.id + '</div>'; return; }
+  if (!r.estimate) { c.innerHTML = `<div class="placeholder">${t('dashboard.detail.no_estimate', { id: r.id })}</div>`; return; }
   const cb = r.estimate.combined;
   const layers = r.estimate.layers || {};
   const actTok = r.actual?.tokens || 0;
   c.innerHTML = `
     <div class="estimate-grid">
       <div class="estimate-card">
-        <h3>Tokens (combined)</h3>
+        <h3>${t('cli.estimate.tokens')}</h3>
         <div class="big">${fmtK(cb.tokens[0])} – ${fmtK(cb.tokens[1])}</div>
-        <div class="small">actual so far: ${fmtK(actTok)} (${pct(actTok, cb.tokens[1])}% of upper)</div>
+        <div class="small">${t('cli.req.actual')}: ${fmtK(actTok)} (${pct(actTok, cb.tokens[1])}%)</div>
       </div>
       <div class="estimate-card">
-        <h3>Hours (combined)</h3>
+        <h3>${t('cli.estimate.hours')}</h3>
         <div class="big">${cb.hours[0]} – ${cb.hours[1]} h</div>
-        <div class="small">confidence: ${cb.confidence}</div>
+        <div class="small">${t('cli.req.confidence')}: ${cb.confidence}</div>
       </div>
     </div>
     <div class="chart-card" style="margin-top:18px">
       <canvas id="reqBurnupCanvas"></canvas>
     </div>
     <table class="layer-table" style="margin-top:18px">
-      <tr><th>Layer</th><th>Tokens</th><th>Hours</th><th>Conf.</th><th>Note</th></tr>
+      <tr><th>Layer</th><th>${t('cli.estimate.tokens')}</th><th>${t('cli.estimate.hours')}</th><th>${t('cli.req.confidence')}</th><th>${t('cli.estimate.reasoning')}</th></tr>
       ${Object.entries(layers).map(([name, l]) => `
         <tr>
           <td><b>${name}</b></td>
@@ -334,7 +405,7 @@ async function refreshReqBurnup(id) {
 
 function renderHistoryTab(c, r) {
   const history = state.data?.history || [];
-  if (!history.length) { c.innerHTML = '<div class="placeholder">No history yet. Complete a requirement to populate.</div>'; return; }
+  if (!history.length) { c.innerHTML = `<div class="placeholder">${t('dashboard.detail.no_history')}</div>`; return; }
   c.innerHTML = `<div class="history-list">${history.map(h => `
     <div class="history-row">
       <span style="font-family:ui-monospace,monospace;color:#8b949e">${esc(h.id)}</span>
@@ -349,9 +420,13 @@ function fmtK(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 
 function pct(a, b) { if (!b) return 0; return Math.round(a / b * 100); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-for (const t of document.querySelectorAll('.topnav .navtab')) {
-  t.onclick = () => setView(t.dataset.view);
+for (const el of document.querySelectorAll('.topnav .navtab')) {
+  el.onclick = () => setView(el.dataset.view);
 }
 
-refreshAll();
-setInterval(refreshAll, 5000);
+// 启动顺序：先取 lang + theme + locales，再做首次刷新
+(async () => {
+  await bootSettings();
+  await refreshAll();
+  setInterval(refreshAll, 5000);
+})();

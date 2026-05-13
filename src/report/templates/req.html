@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="{{lang}}" data-theme="{{theme}}">
+<head>
+<meta charset="utf-8" />
+<title>{{title}} {{titleSuffix}}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>{{styles}}</style>
+</head>
+<body data-i18n-scope="single">
+
+<div class="report-controls">
+  <button class="lang-btn" data-lang="zh">中</button>
+  <button class="lang-btn" data-lang="en">EN</button>
+  <button class="theme-btn" data-theme="dark">🌙</button>
+  <button class="theme-btn" data-theme="light">☀️</button>
+</div>
+
+<header class="report-head">
+  <div class="head-row">
+    <div>
+      <div class="reqid">{{reqId}}</div>
+      <h1>{{title}}</h1>
+      <div class="meta">{{metaChips}}</div>
+    </div>
+    <div class="head-stats">{{headStats}}</div>
+  </div>
+</header>
+
+<section class="card narrative">
+  <h2 data-i18n="report.section.narrative">{{narrativeSectionTitle}}</h2>
+  {{narrative}}
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.prd">{{prdSectionTitle}}</h2>
+  <div class="prd-body">{{prdHtml}}</div>
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.audit">{{auditSectionTitle}}</h2>
+  <div class="audit-summary">{{auditSummary}}</div>
+  {{auditMermaid}}
+  {{auditTables}}
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.burnup">{{burnupSectionTitle}}</h2>
+  <div class="chart-wrap"><canvas id="reqBurnup"></canvas></div>
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.snippets">{{snippetsSectionTitle}}</h2>
+  {{snippets}}
+</section>
+
+<footer class="report-foot">
+  <span>{{footVersion}}</span>
+  <span>{{footGenerated}}</span>
+  <span>{{footSnapshot}}</span>
+</footer>
+
+<script>
+window.__CODEPR_DATA__ = {{dataJson}};
+window.__I18N__ = {{i18nJson}};
+window.__LANG__ = "{{lang}}";
+window.__THEME__ = "{{theme}}";
+</script>
+{{inlineLibs}}
+<script>{{controlsScript}}</script>
+<script>
+(function () {
+  const d = window.__CODEPR_DATA__;
+  if (!d || !d.burnup) return;
+  const canvas = document.getElementById('reqBurnup');
+  if (!canvas) return;
+  const pts = d.burnup.points || [];
+  const startTs = pts[0]?.ts;
+  const endTs = pts[pts.length - 1]?.ts;
+  const est = d.burnup.estimate;
+  const css = getComputedStyle(document.documentElement);
+  const C = {
+    grid: css.getPropertyValue('--border-soft').trim() || '#21262d',
+    text: css.getPropertyValue('--text').trim() || '#c9d1d9',
+    muted: css.getPropertyValue('--text-muted').trim() || '#8b949e',
+    accent: css.getPropertyValue('--accent').trim() || '#58a6ff',
+    warning: css.getPropertyValue('--warning').trim() || '#d29922',
+    band: css.getPropertyValue('--band-warning').trim() || 'rgba(210, 153, 34, 0.12)',
+    danger: css.getPropertyValue('--danger').trim() || '#f85149',
+    dim: css.getPropertyValue('--text-dim').trim() || '#6e7681'
+  };
+  const fmtK = v => v >= 1000 ? (v/1000).toFixed(1)+'k' : String(Math.round(v));
+  const datasets = [
+    {
+      label: window.__T__('chart.req_burnup.actual'),
+      data: pts.map(p => ({ x: p.ts, y: p.cumulative })),
+      borderColor: d.burnup.overBudget ? C.danger : C.accent,
+      borderWidth: 2.5, pointRadius: 2,
+      tension: 0.15, fill: false
+    }
+  ];
+  if (est) {
+    datasets.push({
+      label: window.__T__('chart.req_burnup.upper', { v: fmtK(est[1]) }),
+      data: [{ x: startTs, y: est[1] }, { x: endTs, y: est[1] }],
+      borderColor: C.warning, borderDash: [4, 4], borderWidth: 1.5,
+      pointRadius: 0, fill: '+1',
+      backgroundColor: C.band
+    });
+    datasets.push({
+      label: window.__T__('chart.req_burnup.lower', { v: fmtK(est[0]) }),
+      data: [{ x: startTs, y: est[0] }, { x: endTs, y: est[0] }],
+      borderColor: C.dim, borderDash: [4, 4], borderWidth: 1.5,
+      pointRadius: 0, fill: false
+    });
+  }
+  new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: C.text } } },
+      scales: {
+        x: { type: 'time', grid: { color: C.grid }, ticks: { color: C.muted } },
+        y: {
+          grid: { color: C.grid },
+          ticks: { color: C.muted, callback: v => fmtK(v) }
+        }
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

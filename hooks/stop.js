@@ -41,6 +41,19 @@ await safe(async () => {
         }, repo);
       }
       upsertRequirement(req, repo);
+      // 需求刚转 done → 触发项目快照归档
+      if (req.status === 'done' && req.actual?.completed_at) {
+        try {
+          const { generateProjectReport } = await import('../src/report/generator.js');
+          const { archiveSnapshot } = await import('../src/report/snapshots.js');
+          // 跳过网络以避免 hook 阻塞；用现有缓存的 AI 叙事即可
+          const { outFile } = await generateProjectReport(repo, { skipNetwork: true });
+          const html = (await import('node:fs')).default.readFileSync(outFile, 'utf8');
+          archiveSnapshot(repo, html);
+        } catch (e) {
+          appendEvent({ type: 'snapshot_failed', error: e.message }, repo);
+        }
+      }
     } catch {}
   }
   appendEvent({ type: 'session_stop', req: active, session_id: evt.session_id }, repo);

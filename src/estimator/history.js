@@ -1,26 +1,60 @@
 import { loadHistory } from '../store.js';
+import { embed, cosineSimilarity, embeddingsAvailable } from './embeddings.js';
 
-export function estimateByHistory(prd, repo) {
+export async function estimateByHistory(prd, repo, opts = {}) {
   const history = loadHistory(repo);
   if (history.length < 3) {
     return { layer: 'history', tokens: null, hours: null, confidence: 0, neighbors: [], reason: 'cold-start' };
   }
 
-  const target = featurize(prd);
-  const scored = history
-    .filter(h => h.actual_tokens && h.actual_hours)
-    .map(h => ({ entry: h, score: similarity(target, featurize(h.prd || h)) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
-
-  if (!scored.length) {
+  const usable = history.filter(h => h.actual_tokens && h.actual_hours);
+  if (!usable.length) {
     return { layer: 'history', tokens: null, hours: null, confidence: 0, neighbors: [] };
   }
 
-  const totalScore = scored.reduce((s, x) => s + x.score, 0) || 1;
+  // 优先用 embedding 相似度（语义），降级到 Jaccard（字面）
+  const useEmbed = embeddingsAvailable() && !opts.skipNetwork;
+  let method = 'jaccard';
+  const target = featurize(prd);
+
+  let scored;
+  if (useEmbed) {
+    try {
+      const targetText = textOf(prd);
+      const targetVec = await embed(targetText, repo, opts);
+      if (targetVec) {
+        const items = await Promise.all(usable.map(async h => {
+          const histText = textOf(h.prd || h);
+          const histVec = await embed(histText, repo, opts);
+          if (!histVec) return null;
+          // 语义相似度 + tag Jaccard 微调（避免完全忽略 tag 信号）
+          const cos = cosineSimilarity(targetVec, histVec);
+          const tagJ = jaccard(target.tags, featurize(h.prd || h).tags);
+          return { entry: h, score: 0.8 * cos + 0.2 * tagJ };
+        }));
+        const ok = items.filter(Boolean);
+        if (ok.length) {
+          scored = ok.sort((a, b) => b.score - a.score).slice(0, 5);
+          method = 'embedding';
+        }
+      }
+    } catch {}
+  }
+  if (!scored) {
+    scored = usable
+      .map(h => ({ entry: h, score: similarity(target, featurize(h.prd || h)) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+  }
+
+  if (!scored.length) {
+    return { layer: 'history', tokens: null, hours: null, confidence: 0, neighbors: [], method };
+  }
+
+  const totalScore = scored.reduce((s, x) => s + Math.max(0, x.score), 0) || 1;
   let tokSum = 0, hourSum = 0;
   for (const x of scored) {
-    const w = x.score / totalScore;
+    const w = Math.max(0, x.score) / totalScore;
     tokSum += w * x.entry.actual_tokens;
     hourSum += w * x.entry.actual_hours;
   }
@@ -29,9 +63,14 @@ export function estimateByHistory(prd, repo) {
     layer: 'history',
     tokens: [Math.round(tokSum * 0.75), Math.round(tokSum * 1.4)],
     hours: [round1(hourSum * 0.75), round1(hourSum * 1.4)],
-    confidence: Math.min(0.85, scored[0].score),
-    neighbors: scored.map(s => ({ id: s.entry.id, title: s.entry.title, score: round2(s.score) }))
+    confidence: Math.min(0.85, Math.max(0, scored[0].score)),
+    neighbors: scored.map(s => ({ id: s.entry.id, title: s.entry.title, score: round2(s.score) })),
+    method
   };
+}
+
+function textOf(o) {
+  return `${o.title || ''}\n${(o.tags || []).join(', ')}\n${(o.body || '').slice(0, 4000)}`;
 }
 
 function featurize(o) {

@@ -6,13 +6,22 @@ import { findRepoRoot, paths, ensureCodeprDir } from '../src/paths.js';
 import {
   loadConfig, loadRequirements, saveRequirements,
   upsertRequirement, getRequirement, removeRequirement,
-  writeActiveReq, readActiveReq, appendEvent
+  writeActiveReq, readActiveReq, appendEvent, appendHistory
 } from '../src/store.js';
 import { parsePRD } from '../src/prd-parser.js';
 import { estimate } from '../src/estimator/combine.js';
 import { auditRequirement } from '../src/scanner/diff.js';
+import { t, setLang, detectLang } from '../src/i18n/index.js';
 
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const langIdx = rawArgs.findIndex(a => a === '--lang');
+if (langIdx >= 0 && rawArgs[langIdx + 1]) {
+  setLang(rawArgs[langIdx + 1]);
+  rawArgs.splice(langIdx, 2);
+} else {
+  setLang(detectLang());
+}
+const args = rawArgs;
 const cmd = args[0];
 const rest = args.slice(1);
 const repo = findRepoRoot();
@@ -31,7 +40,11 @@ async function main() {
     case 'audit':     return auditCmd(rest);
     case 'scaffold':  return scaffoldCmd(rest);
     case 'status':    return statusCmd();
+    case 'report':    return reportCmd(rest);
     case 'seed-demo': return seedDemoCmd();
+    case 'seed-real': return seedRealCmd();
+    case 'snapshot': return snapshotCmd(rest);
+    case 'diff':     return diffCmd(rest);
     case 'help':
     case undefined:   return helpCmd();
     default:
@@ -39,6 +52,109 @@ async function main() {
       helpCmd();
       process.exit(1);
   }
+}
+
+async function reportCmd(args) {
+  const force = args.includes('--force');
+  const skipNetwork = args.includes('--no-network');
+  const all = args.includes('--all');
+  const themeIdx = args.indexOf('--theme');
+  const theme = themeIdx >= 0 ? args[themeIdx + 1] : null;
+  const positional = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--theme');
+
+  const { generateReqReport, generateProjectReport } = await import('../src/report/generator.js');
+
+  if (all) {
+    const { outFile, narrative, summary, inlineSizeKb } = await generateProjectReport(repo, { force, skipNetwork, theme });
+    console.log(t('cli.report.generated', { file: outFile }));
+    console.log('   ' + t('cli.report.project_summary', { total: summary.reqsTotal, done: summary.reqsDone, wip: summary.inProgress }));
+    console.log('   ' + t('cli.report.narrative_source', { source: narrative?.source || 'n/a' }));
+    console.log('   ' + (inlineSizeKb ? t('cli.report.inlined', { kb: inlineSizeKb }) : t('cli.report.inlined_skipped')));
+    console.log('   ' + t('cli.report.open_with', { path: outFile.replace(/\\/g, '/') }));
+    return;
+  }
+
+  const id = positional[0];
+  if (!id) throw new Error(t('cli.report.usage'));
+  const { outFile, narrative, inlineSizeKb } = await generateReqReport(repo, id, { force, skipNetwork, theme });
+  console.log(t('cli.report.generated', { file: outFile }));
+  console.log('   ' + t('cli.report.narrative_source', { source: narrative?.source || 'n/a' }));
+  console.log('   ' + (inlineSizeKb ? t('cli.report.inlined', { kb: inlineSizeKb }) : t('cli.report.inlined_skipped')));
+  console.log('   ' + t('cli.report.open_with', { path: outFile.replace(/\\/g, '/') }));
+}
+
+function seedRealCmd() {
+  // Dogfood: 把 codePR 自己的开发历程作为真实数据回填进去。
+  // 数据基于 docs/PROGRESS.md 的里程碑和实际花费的相对时间。
+  const data = loadRequirements(repo);
+  const now = Date.now();
+  const hours = h => new Date(now - h * 3_600_000).toISOString();
+
+  const config = {
+    'req-001': { status: 'done',        tokens: 82000, startedHoursAgo: 78, durationH: 16, progress: 100 },
+    'req-002': { status: 'done',        tokens: 58000, startedHoursAgo: 56, durationH: 12, progress: 100 },
+    'req-003': { status: 'done',        tokens: 71000, startedHoursAgo: 36, durationH: 14, progress: 100 },
+    'req-004': { status: 'in_progress', tokens: 38000, startedHoursAgo: 10, durationH: null, progress: 85 },
+  };
+
+  let touched = 0;
+  for (const r of data.requirements) {
+    const cfg = config[r.id];
+    if (!cfg) continue;
+    r.status = cfg.status;
+    r.progress = cfg.progress;
+    r.created_at = hours(cfg.startedHoursAgo + 4);
+    r.actual = r.actual || {};
+    r.actual.started_at = hours(cfg.startedHoursAgo);
+    r.actual.tokens = cfg.tokens;
+    if (cfg.status === 'done') {
+      const completedHoursAgo = cfg.startedHoursAgo - (cfg.durationH || 8);
+      r.actual.completed_at = hours(Math.max(0, completedHoursAgo));
+      r.actual.last_at = r.actual.completed_at;
+      r.actual.hours = cfg.durationH;
+    } else {
+      r.actual.last_at = hours(0);
+    }
+
+    // 生成事件流：8-12 个 tool_use 事件分布在工期内
+    const burst = 9 + Math.floor(Math.random() * 4);
+    let consumed = 0;
+    const target = cfg.tokens;
+    const span = cfg.startedHoursAgo - (cfg.status === 'done' ? Math.max(0, cfg.startedHoursAgo - cfg.durationH) : 0);
+    for (let i = 0; i < burst; i++) {
+      let portion = i === burst - 1
+        ? Math.max(0, target - consumed)
+        : Math.round(target * (0.05 + Math.random() * 0.16));
+      if (consumed + portion > target) portion = Math.max(0, target - consumed);
+      consumed += portion;
+      const tsAgo = cfg.startedHoursAgo - (i + 1) * (span / (burst + 1));
+      appendEvent({
+        ts: hours(tsAgo),
+        type: 'tool_use',
+        req: r.id,
+        session_id: `real-${r.id}`,
+        tool: ['Edit', 'Write', 'Read', 'Bash', 'Grep'][i % 5],
+        tokens: portion
+      }, repo);
+    }
+
+    // 完成后归档 history
+    if (cfg.status === 'done') {
+      appendHistory({
+        id: r.id,
+        title: r.title,
+        tags: r.tags,
+        actual_tokens: cfg.tokens,
+        actual_hours: cfg.durationH,
+        estimated: r.estimate?.combined,
+        prd: { title: r.title, body: '', tags: r.tags }
+      }, repo);
+    }
+    upsertRequirement(r, repo);
+    touched++;
+  }
+  console.log(t('cli.seed_real.done', { n: touched }));
+  console.log(t('cli.seed_real.legend'));
 }
 
 function seedDemoCmd() {
@@ -93,7 +209,7 @@ function seedDemoCmd() {
     }
     upsertRequirement(r, repo);
   }
-  console.log(`seeded events for ${data.requirements.length} requirement(s).`);
+  console.log(t('cli.seed_demo.events', { n: data.requirements.length }));
 }
 
 function seedDemoHistory(now) {
@@ -135,26 +251,95 @@ function seedDemoHistory(now) {
     }));
   }
   fs.appendFileSync(histPath, lines.join('\n') + '\n');
-  console.log(`seeded ${samples.length} history entries.`);
+  console.log(t('cli.seed_demo.history', { n: samples.length }));
 }
 
-function helpCmd() {
-  console.log(`codepr — Claude Code requirement-driven progress board
+async function snapshotCmd(args) {
+  const sub = args[0] || 'list';
+  const { listSnapshots, archiveSnapshot } = await import('../src/report/snapshots.js');
+  if (sub === 'list') {
+    const list = listSnapshots(repo);
+    if (!list.length) { console.log(t('cli.snapshot.list_empty')); return; }
+    console.log(t('cli.snapshot.list_title'));
+    for (const s of list) {
+      console.log(`  ${s.ts}  reqs=${s.reqsTotal} done=${s.reqsDone} history=${s.historyCount}`);
+    }
+    return;
+  }
+  if (sub === 'now') {
+    const { generateProjectReport } = await import('../src/report/generator.js');
+    const { outFile } = await generateProjectReport(repo, { skipNetwork: true });
+    const html = fs.readFileSync(outFile, 'utf8');
+    const { folder } = archiveSnapshot(repo, html);
+    console.log(t('cli.snapshot.archived', { file: folder }));
+    return;
+  }
+  throw new Error('usage: codeforesight snapshot [list|now]');
+}
 
-Usage:
-  codepr req add <file.md>      Register a PRD as a requirement (auto-estimates)
-  codepr req list               List requirements with status
-  codepr req show <id>          Show one requirement detail
-  codepr req done <id>          Mark requirement as done
-  codepr req active <id|none>   Set / clear current active requirement
-  codepr req rm <id>            Remove
-  codepr estimate <id>          Re-run three-layer estimator
-  codepr audit <id>             Diff design (PRD expects.*) vs actual code
-  codepr scaffold <id>          Create empty placeholders for missing items
-  codepr sync                   Scan PRD dir for new files
-  codepr progress [--port N]    Launch dashboard at localhost:7878
-  codepr status                 One-line status (used by statusline)
-  codepr seed-demo              Generate demo events for chart preview
+async function diffCmd(args) {
+  const [a, b] = args.filter(a => !a.startsWith('--'));
+  if (!a || !b) throw new Error(t('cli.diff.usage'));
+  const { loadSnapshotByTs, diffSnapshots } = await import('../src/report/snapshots.js');
+  const snapA = loadSnapshotByTs(repo, a);
+  if (!snapA) throw new Error(t('cli.diff.not_found', { ts: a }));
+  const snapB = loadSnapshotByTs(repo, b);
+  if (!snapB) throw new Error(t('cli.diff.not_found', { ts: b }));
+  const diff = diffSnapshots(snapA, snapB);
+  console.log('\n' + t('cli.diff.title', { a: snapA.ts, b: snapB.ts }));
+  const s = diff.summary;
+  console.log(`  reqs Δ${signed(s.reqDelta)}  done Δ${signed(s.doneDelta)}  tokens Δ${signed(s.totalTokenDelta)}  history Δ${signed(s.historyDelta)}`);
+  if (!diff.added.length && !diff.removed.length && !diff.changed.length) {
+    console.log('  ' + t('cli.diff.no_changes'));
+    return;
+  }
+  if (diff.added.length) {
+    console.log('\n  ➕ added:');
+    for (const r of diff.added) console.log(`    ${r.id} [${r.status}] ${r.title}`);
+  }
+  if (diff.removed.length) {
+    console.log('\n  ➖ removed:');
+    for (const r of diff.removed) console.log(`    ${r.id} ${r.title}`);
+  }
+  if (diff.changed.length) {
+    console.log('\n  Δ changed:');
+    for (const c of diff.changed) {
+      console.log(`    ${c.id} ${c.title}`);
+      for (const d of c.diffs) {
+        const deltaStr = d.delta != null ? ` (Δ${signed(d.delta)})` : '';
+        console.log(`      ${d.field}: ${d.from} → ${d.to}${deltaStr}`);
+      }
+    }
+  }
+  console.log('');
+}
+
+function signed(n) { return (n > 0 ? '+' : '') + n; }
+
+function helpCmd() {
+  console.log(`${t('cli.help.title')}
+
+${t('cli.help.usage')}:
+  codeforesight req add <file.md>     ${t('cli.help.req_add')}
+  codeforesight req list              ${t('cli.help.req_list')}
+  codeforesight req show <id>         ${t('cli.help.req_show')}
+  codeforesight req done <id>         ${t('cli.help.req_done')}
+  codeforesight req active <id|none>  ${t('cli.help.req_active')}
+  codeforesight req rm <id>           ${t('cli.help.req_rm')}
+  codeforesight estimate <id>         ${t('cli.help.estimate')}
+  codeforesight audit <id>            ${t('cli.help.audit')}
+  codeforesight scaffold <id>         ${t('cli.help.scaffold')}
+  codeforesight sync                  ${t('cli.help.sync')}
+  codeforesight progress [--port N]   ${t('cli.help.progress')}
+  codeforesight status                ${t('cli.help.status')}
+  codeforesight report <id>           ${t('cli.help.report')}
+  codeforesight report --all          ${t('cli.help.report_all')}
+  codeforesight seed-demo             ${t('cli.help.seed_demo')}
+  codeforesight seed-real             ${t('cli.help.seed_real')}
+  codeforesight snapshot list|now     列出 / 立刻归档项目状态快照
+  codeforesight diff <ts1> <ts2>      对比两份快照
+
+Aliases: codeforesight | cf | codepr      Add --lang en|zh to override locale.
 `);
 }
 
@@ -169,7 +354,7 @@ async function reqCmd(args) {
       if (!fs.existsSync(abs)) throw new Error(`PRD not found: ${abs}`);
       const prd = parsePRD(abs);
       const config = loadConfig(repo);
-      console.log(`Estimating ${prd.id} "${prd.title}"...`);
+      console.log(t('cli.req.estimating', { id: prd.id, title: prd.title }));
       const est = await estimate(prd, repo, config);
       const req = {
         id: prd.id,
@@ -190,13 +375,13 @@ async function reqCmd(args) {
     }
     case 'list': {
       const data = loadRequirements(repo);
-      if (!data.requirements.length) { console.log('(no requirements)'); return; }
+      if (!data.requirements.length) { console.log(t('cli.req.no_requirements')); return; }
       const active = readActiveReq(repo);
       for (const r of data.requirements) {
         const mark = r.id === active ? '★' : ' ';
         const tok = r.estimate?.combined?.tokens;
         const hr = r.estimate?.combined?.hours;
-        const tokFmt = tok ? `~${fmtK(tok[0])}-${fmtK(tok[1])}tok` : 'no estimate';
+        const tokFmt = tok ? `~${fmtK(tok[0])}-${fmtK(tok[1])}tok` : t('cli.req.no_estimate');
         const hrFmt = hr ? `~${hr[0]}-${hr[1]}h` : '';
         console.log(`${mark} ${pad(r.id, 14)} [${pad(r.status, 11)}] ${pad(`${r.progress || 0}%`, 5)} ${pad(tokFmt, 20)} ${hrFmt}  ${r.title}`);
       }
@@ -205,33 +390,33 @@ async function reqCmd(args) {
     case 'show': {
       const id = args[1];
       const r = getRequirement(id, repo);
-      if (!r) throw new Error(`not found: ${id}`);
+      if (!r) throw new Error(t('cli.req.not_found', { id }));
       printReq(r);
       return;
     }
     case 'done': {
       const id = args[1];
       const r = getRequirement(id, repo);
-      if (!r) throw new Error(`not found: ${id}`);
+      if (!r) throw new Error(t('cli.req.not_found', { id }));
       r.status = 'done'; r.progress = 100;
       r.actual = r.actual || {}; r.actual.completed_at = new Date().toISOString();
       upsertRequirement(r, repo);
-      console.log(`done: ${id}`);
+      console.log(t('cli.req.done', { id }));
       return;
     }
     case 'active': {
       const id = args[1];
-      if (!id || id === 'none') { writeActiveReq(null, repo); console.log('active: (cleared)'); return; }
+      if (!id || id === 'none') { writeActiveReq(null, repo); console.log(t('cli.req.active_cleared')); return; }
       const r = getRequirement(id, repo);
-      if (!r) throw new Error(`not found: ${id}`);
+      if (!r) throw new Error(t('cli.req.not_found', { id }));
       writeActiveReq(id, repo);
-      console.log(`active: ${id}`);
+      console.log(t('cli.req.active_set', { id }));
       return;
     }
     case 'rm': {
       const id = args[1];
       const n = removeRequirement(id, repo);
-      console.log(n ? `removed: ${id}` : `not found: ${id}`);
+      console.log(n ? t('cli.req.removed', { id }) : t('cli.req.not_found', { id }));
       return;
     }
     default:
@@ -268,7 +453,7 @@ async function scaffoldCmd(args) {
   const id = args[0];
   const req = getRequirement(id, repo);
   if (!req) throw new Error(`not found: ${id}`);
-  if (!req.audit) throw new Error(`run 'codepr audit ${id}' first`);
+  if (!req.audit) throw new Error(t('cli.scaffold.no_audit', { id }));
   const created = [];
   for (const m of req.audit.handlers.missing || []) {
     const file = (typeof m.ref === 'string' && m.ref.includes(':')) ? m.ref.split(':')[0] : `src/handlers/${m.name}.ts`;
@@ -294,21 +479,23 @@ async function scaffoldCmd(args) {
       `// codepr scaffold for ${req.id}: ${m.name}\nexport class ${m.name} {\n  // TODO: fields\n}\n`);
     created.push(file);
   }
-  console.log(created.length ? `scaffolded ${created.length} files:\n  ${created.join('\n  ')}` : '(nothing missing or all already present)');
+  console.log(created.length
+    ? t('cli.scaffold.scaffolded', { n: created.length }) + '\n  ' + created.join('\n  ')
+    : t('cli.scaffold.nothing'));
 }
 
 function syncCmd() {
   const config = loadConfig(repo);
   const dir = path.resolve(repo, config.prdDir);
-  if (!fs.existsSync(dir)) { console.log(`(no PRD dir: ${config.prdDir})`); return; }
+  if (!fs.existsSync(dir)) { console.log(t('cli.sync.no_dir', { dir: config.prdDir })); return; }
   const data = loadRequirements(repo);
   const known = new Set(data.requirements.map(r => r.file));
   const news = fs.readdirSync(dir).filter(f => f.endsWith('.md'))
     .map(f => path.relative(repo, path.join(dir, f)))
     .filter(f => !known.has(f));
-  if (!news.length) { console.log('(no new PRDs)'); return; }
-  console.log(`Found ${news.length} new PRD(s). Run:`);
-  for (const f of news) console.log(`  codepr req add "${f}"`);
+  if (!news.length) { console.log(t('cli.sync.no_new')); return; }
+  console.log(t('cli.sync.found', { n: news.length }));
+  for (const f of news) console.log(`  codeforesight req add "${f}"`);
 }
 
 async function progressCmd(args) {
@@ -317,7 +504,7 @@ async function progressCmd(args) {
   const usePort = port || config.dashboardPort;
   const here = path.dirname(fileURLToPath(import.meta.url));
   const server = path.join(here, '..', 'src', 'dashboard', 'server.js');
-  console.log(`Starting dashboard on http://localhost:${usePort}`);
+  console.log(t('cli.progress.starting', { port: usePort }));
   const { spawn } = await import('node:child_process');
   const child = spawn(process.execPath, [server], {
     stdio: 'inherit',
@@ -348,46 +535,52 @@ function truncate(s, n) { s = String(s); return s.length <= n ? s : s.slice(0, n
 
 function printReq(r) {
   console.log(`\n${r.id}  ${r.title}`);
-  console.log(`  status: ${r.status}  progress: ${r.progress || 0}%  priority: ${r.priority}  tags: ${(r.tags || []).join(', ')}`);
+  console.log(`  ${t('cli.req.status')}: ${r.status}  ${t('cli.req.progress')}: ${r.progress || 0}%  ${t('cli.req.priority')}: ${r.priority}  ${t('cli.req.tags')}: ${(r.tags || []).join(', ')}`);
   console.log(`  PRD: ${r.file}`);
   if (r.estimate?.combined) {
     const c = r.estimate.combined;
-    console.log(`  estimate: ${fmtK(c.tokens[0])}-${fmtK(c.tokens[1])} tokens, ${c.hours[0]}-${c.hours[1]} hours (conf ${c.confidence})`);
+    console.log(`  ${t('cli.req.estimate')}: ${fmtK(c.tokens[0])}-${fmtK(c.tokens[1])} ${t('cli.estimate.tokens')}, ${c.hours[0]}-${c.hours[1]} ${t('cli.estimate.hours')} (${t('cli.req.confidence')} ${c.confidence})`);
   }
   if (r.actual) {
-    console.log(`  actual:   ${fmtK(r.actual.tokens || 0)} tokens, ${r.actual.tool_calls || 0} tool calls`);
+    console.log(`  ${t('cli.req.actual')}:   ${fmtK(r.actual.tokens || 0)} ${t('cli.estimate.tokens')}, ${r.actual.tool_calls || 0} tool calls`);
   }
   console.log('');
 }
 
 function printEstimate(est) {
   const c = est.combined;
-  console.log(`\nFinal estimate (combined):`);
-  console.log(`  tokens: ${fmtK(c.tokens[0])} – ${fmtK(c.tokens[1])}`);
-  console.log(`  hours:  ${c.hours[0]} – ${c.hours[1]}`);
-  console.log(`  confidence: ${c.confidence}`);
-  console.log(`\nLayer breakdown:`);
+  console.log(`\n${t('cli.estimate.final')}:`);
+  console.log(`  ${t('cli.estimate.tokens')}: ${fmtK(c.tokens[0])} – ${fmtK(c.tokens[1])}`);
+  console.log(`  ${t('cli.estimate.hours')}:  ${c.hours[0]} – ${c.hours[1]}`);
+  console.log(`  ${t('cli.req.confidence')}: ${c.confidence}`);
+  console.log(`\n${t('cli.estimate.layer_breakdown')}:`);
   for (const [name, l] of Object.entries(est.layers)) {
-    if (!l.tokens) { console.log(`  ${pad(name, 8)} (skipped: ${l.reason || 'n/a'})`); continue; }
-    console.log(`  ${pad(name, 8)} tokens=${fmtK(l.tokens[0])}-${fmtK(l.tokens[1])} hours=${l.hours[0]}-${l.hours[1]} conf=${l.confidence}`);
-    if (l.reasoning) console.log(`           reasoning: ${l.reasoning}`);
+    if (!l.tokens) { console.log(`  ${pad(name, 8)} (${t('cli.estimate.skipped')}: ${l.reason || 'n/a'})`); continue; }
+    console.log(`  ${pad(name, 8)} ${t('cli.estimate.tokens')}=${fmtK(l.tokens[0])}-${fmtK(l.tokens[1])} ${t('cli.estimate.hours')}=${l.hours[0]}-${l.hours[1]} conf=${l.confidence}`);
+    if (l.reasoning) console.log(`           ${t('cli.estimate.reasoning')}: ${l.reasoning}`);
   }
   console.log('');
 }
 
 function printAudit(r) {
-  console.log(`\nDesign ↔ Implementation audit:`);
-  console.log(`  matched: ${r.summary.matched}  missing: ${r.summary.missing}  deviations: ${r.summary.deviations}  completion: ${r.summary.completion}%`);
+  console.log(`\n${t('cli.audit.title')}:`);
+  console.log(`  ${t('cli.audit.matched')}: ${r.summary.matched}  ${t('cli.audit.missing')}: ${r.summary.missing}  ${t('cli.audit.deviations')}: ${r.summary.deviations}  ${t('cli.audit.completion')}: ${r.summary.completion}%`);
+  const catLabels = {
+    routes: t('cli.audit.category_routes'),
+    handlers: t('cli.audit.category_handlers'),
+    hooks: t('cli.audit.category_hooks'),
+    db_models: t('cli.audit.category_db_models')
+  };
   for (const cat of ['routes', 'handlers', 'hooks', 'db_models']) {
     const d = r[cat];
     if (!d.matched.length && !d.missing.length) continue;
-    console.log(`\n  [${cat}]`);
+    console.log(`\n  [${catLabels[cat]}]`);
     for (const m of d.matched) {
       const dev = m.deviation ? `  ⚠️  ${m.deviation}` : '';
       console.log(`    ✅ ${formatItem(cat, m)}${dev}`);
     }
     for (const m of d.missing) {
-      console.log(`    ❌ ${formatItem(cat, m)}  (missing)`);
+      console.log(`    ❌ ${formatItem(cat, m)}  ${t('cli.audit.suffix_missing')}`);
     }
   }
   console.log('');

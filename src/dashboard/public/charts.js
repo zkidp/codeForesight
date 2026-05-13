@@ -1,18 +1,28 @@
-const C = {
-  bg: '#0d1117',
-  grid: '#21262d',
-  text: '#c9d1d9',
-  muted: '#8b949e',
-  scopeUpper: '#d29922',
-  scopeLower: '#6e7681',
-  band: 'rgba(210, 153, 34, 0.12)',
-  actual: '#58a6ff',
-  done: '#56d364',
-  over: '#f85149',
-  ai: '#bc8cff',
-  rules: '#79c0ff',
-  history: '#56d364'
-};
+// 颜色从 CSS 变量动态读取，跟随主题切换
+function readColor(name, fallback) {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch { return fallback; }
+}
+const Cget = () => ({
+  bg:          readColor('--bg', '#0d1117'),
+  grid:        readColor('--border-soft', '#21262d'),
+  text:        readColor('--text', '#c9d1d9'),
+  muted:       readColor('--text-muted', '#8b949e'),
+  scopeUpper:  readColor('--warning', '#d29922'),
+  scopeLower:  readColor('--text-dim', '#6e7681'),
+  band:        readColor('--band-warning', 'rgba(210, 153, 34, 0.12)'),
+  actual:      readColor('--accent', '#58a6ff'),
+  done:        readColor('--success', '#56d364'),
+  over:        readColor('--danger', '#f85149'),
+  ai:          readColor('--purple', '#bc8cff'),
+  rules:       readColor('--accent', '#79c0ff'),
+  history:     readColor('--success', '#56d364')
+});
+// 每次 baseOpts/draw 调用时重新读取，自动跟随主题
+const C = new Proxy({}, { get(_t, prop) { return Cget()[prop]; } });
+const t = (k, p) => (window.__T__ ? window.__T__(k, p) : k);
 
 const baseOpts = () => ({
   responsive: true,
@@ -46,7 +56,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
   if (prevChart) prevChart.destroy();
   const pts = data.points || [];
   if (!pts.length) {
-    drawEmpty(canvas, '尚无数据 — 注册 PRD 并产生事件后会出现燃烧图');
+    drawEmpty(canvas, t('chart.req_burnup.empty'));
     return null;
   }
 
@@ -58,7 +68,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
   const opts = baseOpts();
   opts.plugins.title = {
     display: true,
-    text: '项目 Burnup — 估算包络 vs 实际进度',
+    text: t('chart.project_burnup.title'),
     color: C.text,
     font: { size: 13, weight: '500' }
   };
@@ -72,7 +82,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
     data: {
       datasets: [
         {
-          label: '估算上界',
+          label: t('chart.project_burnup.scope_upper'),
           data: upperData,
           borderColor: C.scopeUpper,
           borderWidth: 1.5,
@@ -84,7 +94,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
           backgroundColor: C.band
         },
         {
-          label: '估算下界',
+          label: t('chart.project_burnup.scope_lower'),
           data: lowerData,
           borderColor: C.scopeLower,
           borderWidth: 1.5,
@@ -95,7 +105,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
           fill: false
         },
         {
-          label: '实际累计',
+          label: t('chart.project_burnup.actual'),
           data: actualData,
           borderColor: C.actual,
           borderWidth: 2.5,
@@ -105,7 +115,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
           fill: false
         },
         {
-          label: '已完成 scope',
+          label: t('chart.project_burnup.completed'),
           data: doneData,
           borderColor: C.done,
           borderWidth: 2,
@@ -123,7 +133,7 @@ export function drawProjectBurnup(canvas, data, prevChart) {
 export function drawReqBurnup(canvas, data, prevChart) {
   if (prevChart) prevChart.destroy();
   if (!data || !data.points?.length) {
-    drawEmpty(canvas, '尚无 token 消耗事件 — 在 Claude Code 里以此需求为 active 工作即可生成');
+    drawEmpty(canvas, t('chart.req_burnup.empty'));
     return null;
   }
   const pts = data.points;
@@ -136,7 +146,7 @@ export function drawReqBurnup(canvas, data, prevChart) {
 
   const datasets = [
     {
-      label: '实际累计 token',
+      label: t('chart.req_burnup.actual'),
       data: cumLine,
       borderColor: data.overBudget ? C.over : C.actual,
       borderWidth: 2.5,
@@ -149,7 +159,7 @@ export function drawReqBurnup(canvas, data, prevChart) {
 
   if (upper != null) {
     datasets.push({
-      label: `估算上界 (${fmtK(upper)})`,
+      label: t('chart.req_burnup.upper', { v: fmtK(upper) }),
       data: [{ x: startTs, y: upper }, { x: endTs, y: upper }],
       borderColor: C.scopeUpper,
       borderWidth: 1.5,
@@ -159,7 +169,7 @@ export function drawReqBurnup(canvas, data, prevChart) {
       backgroundColor: C.band
     });
     datasets.push({
-      label: `估算下界 (${fmtK(lower)})`,
+      label: t('chart.req_burnup.lower', { v: fmtK(lower) }),
       data: [{ x: startTs, y: lower }, { x: endTs, y: lower }],
       borderColor: C.scopeLower,
       borderWidth: 1.5,
@@ -173,7 +183,7 @@ export function drawReqBurnup(canvas, data, prevChart) {
     for (const [name, range] of Object.entries(data.estimateLayers)) {
       if (!range) continue;
       datasets.push({
-        label: `${name} 上界`,
+        label: t('chart.req_burnup.layer_upper', { layer: name }),
         data: [{ x: startTs, y: range[1] }, { x: endTs, y: range[1] }],
         borderColor: C[name] || C.muted,
         borderWidth: 1,
@@ -188,7 +198,7 @@ export function drawReqBurnup(canvas, data, prevChart) {
   const opts = baseOpts();
   opts.plugins.title = {
     display: true,
-    text: `${data.title || data.reqId} — 单需求 token burnup`,
+    text: `${data.title || data.reqId} ${t('chart.req_burnup.title_suffix')}`,
     color: C.text,
     font: { size: 13, weight: '500' }
   };
@@ -207,7 +217,7 @@ export function drawReqBurnup(canvas, data, prevChart) {
 export function drawCalibration(canvas, data, prevChart) {
   if (prevChart) prevChart.destroy();
   if (!data || !data.points?.length) {
-    drawEmpty(canvas, '暂无校准数据 — 完成至少 1 个需求后即可绘制估算 vs 实际散点');
+    drawEmpty(canvas, t('chart.calibration.empty'));
     return null;
   }
 
@@ -219,14 +229,14 @@ export function drawCalibration(canvas, data, prevChart) {
   opts.scales = {
     x: {
       type: 'linear',
-      title: { display: true, text: '估算 token (区间中点)', color: C.muted, font: { size: 11 } },
+      title: { display: true, text: t('chart.calibration.x_axis'), color: C.muted, font: { size: 11 } },
       grid: { color: C.grid },
       ticks: { color: C.muted, font: { size: 10 }, callback: v => fmtK(v) },
       min: 0, max
     },
     y: {
       type: 'linear',
-      title: { display: true, text: '实际 token', color: C.muted, font: { size: 11 } },
+      title: { display: true, text: t('chart.calibration.y_axis'), color: C.muted, font: { size: 11 } },
       grid: { color: C.grid },
       ticks: { color: C.muted, font: { size: 10 }, callback: v => fmtK(v) },
       min: 0, max
@@ -234,7 +244,7 @@ export function drawCalibration(canvas, data, prevChart) {
   };
   opts.plugins.title = {
     display: true,
-    text: `估算校准 — n=${data.summary.n} · 命中区间 ${data.summary.accuracy}% · 平均 ratio ${data.summary.meanRatio} (${data.summary.bias})`,
+    text: t('chart.calibration.title', { n: data.summary.n, acc: data.summary.accuracy, ratio: data.summary.meanRatio, bias: data.summary.bias }),
     color: C.text,
     font: { size: 13, weight: '500' }
   };
@@ -243,10 +253,10 @@ export function drawCalibration(canvas, data, prevChart) {
       const p = ctx.raw;
       return [
         `${p.label}`,
-        `估算中点: ${fmtK(p.x)} tok`,
-        `实际: ${fmtK(p.y)} tok`,
-        `区间: ${fmtK(p.lower)}–${fmtK(p.upper)}`,
-        `命中: ${p.inRange ? '✅' : '❌'}`
+        `${t('chart.calibration.tooltip_est_mid')}: ${fmtK(p.x)} tok`,
+        `${t('chart.calibration.tooltip_actual')}: ${fmtK(p.y)} tok`,
+        `${t('chart.calibration.tooltip_range')}: ${fmtK(p.lower)}–${fmtK(p.upper)}`,
+        `${t('chart.calibration.tooltip_hit')}: ${p.inRange ? '✅' : '❌'}`
       ];
     }
   };
@@ -270,7 +280,7 @@ export function drawCalibration(canvas, data, prevChart) {
     data: {
       datasets: [
         {
-          label: '±50% 区间上限',
+          label: t('chart.calibration.upper_band'),
           data: upperBand,
           type: 'line',
           borderColor: 'transparent',
@@ -281,7 +291,7 @@ export function drawCalibration(canvas, data, prevChart) {
           order: 99
         },
         {
-          label: '±50% 区间下限',
+          label: t('chart.calibration.lower_band'),
           data: lowerBand,
           type: 'line',
           borderColor: 'transparent',
@@ -292,7 +302,7 @@ export function drawCalibration(canvas, data, prevChart) {
           order: 99
         },
         {
-          label: '完美校准 (y=x)',
+          label: t('chart.calibration.diagonal'),
           data: diagonal,
           type: 'line',
           borderColor: C.muted,
@@ -303,7 +313,7 @@ export function drawCalibration(canvas, data, prevChart) {
           fill: false
         },
         {
-          label: '命中估算区间',
+          label: t('chart.calibration.in_range'),
           data: inRange.map(toPoint),
           backgroundColor: C.done,
           borderColor: C.done,
@@ -311,7 +321,7 @@ export function drawCalibration(canvas, data, prevChart) {
           pointHoverRadius: 8
         },
         {
-          label: '超出估算区间',
+          label: t('chart.calibration.out_of_range'),
           data: outOfRange.map(toPoint),
           backgroundColor: C.over,
           borderColor: C.over,
@@ -327,14 +337,14 @@ export function drawCalibration(canvas, data, prevChart) {
 export function drawCFD(canvas, data, prevChart) {
   if (prevChart) prevChart.destroy();
   if (!data || !data.points?.length) {
-    drawEmpty(canvas, '尚无需求 — 注册 PRD 后状态变化会形成 CFD');
+    drawEmpty(canvas, t('chart.cfd.empty'));
     return null;
   }
   const pts = data.points;
   const opts = baseOpts();
   opts.plugins.title = {
     display: true,
-    text: `累积流程图 (CFD) — peak WIP=${data.summary.maxInProgress}${data.summary.wipWarning ? ' ⚠️' : ''}`,
+    text: t('chart.cfd.title', { v: data.summary.maxInProgress }) + (data.summary.wipWarning ? ' ⚠️' : ''),
     color: C.text,
     font: { size: 13, weight: '500' }
   };
@@ -388,7 +398,7 @@ export function drawCFD(canvas, data, prevChart) {
 export function drawGantt(canvas, data, prevChart) {
   if (prevChart) prevChart.destroy();
   if (!data || !data.rows?.length) {
-    drawEmpty(canvas, '尚无需求 — 注册 PRD 后会显示甘特图');
+    drawEmpty(canvas, t('chart.gantt.empty'));
     return null;
   }
 
@@ -413,7 +423,7 @@ export function drawGantt(canvas, data, prevChart) {
   opts.indexAxis = 'y';
   opts.plugins.title = {
     display: true,
-    text: '需求时间轴 — 实际工期 vs 估算工期',
+    text: t('chart.gantt.title'),
     color: C.text,
     font: { size: 13, weight: '500' }
   };
@@ -432,17 +442,17 @@ export function drawGantt(canvas, data, prevChart) {
   opts.plugins.tooltip.callbacks = {
     label: (ctx) => {
       const d = ctx.raw;
-      if (d.estHours != null) return `估算上界工期: ${d.estHours} h`;
+      if (d.estHours != null) return `${t('chart.gantt.tooltip_est_hours')}: ${d.estHours} h`;
       const start = new Date(d.x[0]).toLocaleString();
       const end = new Date(d.x[1]).toLocaleString();
       const dur = (new Date(d.x[1]) - new Date(d.x[0])) / 3_600_000;
       return [
-        `状态: ${d.status}`,
-        `进度: ${d.progress}%`,
-        `实际 token: ${fmtK(d.actualTokens)}`,
-        `开始: ${start}`,
-        `结束: ${end}`,
-        `工期: ${dur.toFixed(1)} h`
+        `${t('chart.gantt.tooltip_status')}: ${d.status}`,
+        `${t('chart.gantt.tooltip_progress')}: ${d.progress}%`,
+        `${t('chart.gantt.tooltip_tokens')}: ${fmtK(d.actualTokens)}`,
+        `${t('chart.gantt.tooltip_start')}: ${start}`,
+        `${t('chart.gantt.tooltip_end')}: ${end}`,
+        `${t('chart.gantt.tooltip_duration')}: ${dur.toFixed(1)} h`
       ];
     }
   };
@@ -454,7 +464,7 @@ export function drawGantt(canvas, data, prevChart) {
       labels,
       datasets: [
         {
-          label: '估算上界工期',
+          label: t('chart.gantt.estimate'),
           data: estBars,
           backgroundColor: 'rgba(210, 153, 34, 0.18)',
           borderColor: 'rgba(210, 153, 34, 0.4)',
@@ -464,7 +474,7 @@ export function drawGantt(canvas, data, prevChart) {
           categoryPercentage: 0.85
         },
         {
-          label: '实际工期',
+          label: t('chart.gantt.actual'),
           data: actualBars,
           backgroundColor: actualBars.map(b => statusColor(b.status)),
           borderColor: actualBars.map(b => statusColor(b.status)),

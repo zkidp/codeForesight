@@ -2,3 +2,11 @@ node_modules/
 .codepr/
 *.log
 .DS_Store
+
+# Claude Code local overrides
+.claude/settings.local.json
+
+# Editor / OS
+.idea/
+.vscode/
+Thumbs.db

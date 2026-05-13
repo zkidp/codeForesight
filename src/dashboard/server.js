@@ -7,6 +7,8 @@ import { loadRequirements, loadHistory, getRequirement } from '../store.js';
 import { parsePRD } from '../prd-parser.js';
 import { auditRequirement } from '../scanner/diff.js';
 import { projectBurnup, reqBurnup, calibration, cfd, gantt } from '../charts/timeseries.js';
+import { loadAllLocales, detectLang } from '../i18n/index.js';
+import { readCCTheme } from '../report/cc-settings.js';
 
 const repo = process.env.CODEPR_REPO || findRepoRoot();
 const port = Number(process.env.CODEPR_PORT || 7878);
@@ -99,6 +101,14 @@ function handleApi(url, res) {
 
   if (url.pathname === '/api/charts/gantt') {
     return send(200, gantt(repo));
+  }
+
+  if (url.pathname === '/api/settings') {
+    return send(200, {
+      lang: detectLang(),
+      theme: readCCTheme(),
+      locales: loadAllLocales()
+    });
   }
 
   return send(404, { error: 'no such api' });

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="{{lang}}" data-theme="{{theme}}">
+<head>
+<meta charset="utf-8" />
+<title>{{projectName}} {{titleSuffix}}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>{{styles}}</style>
+</head>
+<body class="project-report" data-i18n-scope="project">
+
+<div class="report-controls">
+  <button class="lang-btn" data-lang="zh">中</button>
+  <button class="lang-btn" data-lang="en">EN</button>
+  <button class="theme-btn" data-theme="dark">🌙</button>
+  <button class="theme-btn" data-theme="light">☀️</button>
+</div>
+
+<header class="report-head">
+  <div class="head-row">
+    <div>
+      <div class="reqid">{{headerKicker}}</div>
+      <h1>{{projectName}}</h1>
+      <div class="meta">{{projectChips}}</div>
+    </div>
+    <div class="head-stats">{{projectStats}}</div>
+  </div>
+</header>
+
+<section class="card narrative">
+  <h2 data-i18n="report.section.project_narrative">{{projectNarrativeTitle}}</h2>
+  {{projectNarrative}}
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.architecture">{{archSectionTitle}}</h2>
+  {{architectureHtml}}
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.project_burnup">{{burnupSectionTitle}}</h2>
+  <div class="chart-wrap"><canvas id="projectBurnup"></canvas></div>
+</section>
+
+<div class="chart-row">
+  <section class="card">
+    <h2 data-i18n="report.section.cfd">{{cfdSectionTitle}}</h2>
+    <div class="chart-wrap"><canvas id="cfd"></canvas></div>
+  </section>
+  <section class="card">
+    <h2 data-i18n="report.section.calibration">{{calibSectionTitle}}</h2>
+    <div class="chart-wrap"><canvas id="calibration"></canvas></div>
+  </section>
+</div>
+
+<section class="card">
+  <h2 data-i18n="report.section.gantt">{{ganttSectionTitle}}</h2>
+  <div class="chart-wrap" style="height:{{ganttHeight}}px"><canvas id="gantt"></canvas></div>
+</section>
+
+<section class="card">
+  <h2 data-i18n="report.section.req_list">{{reqListSectionTitle}}</h2>
+  <div class="req-grid">{{reqCards}}</div>
+</section>
+
+<footer class="report-foot">
+  <span>{{footVersion}}</span>
+  <span>{{footGenerated}}</span>
+  <span>{{footReqCount}}</span>
+  <span>{{footType}}</span>
+</footer>
+
+<script>
+window.__CODEPR_DATA__ = {{dataJson}};
+window.__I18N__ = {{i18nJson}};
+window.__LANG__ = "{{lang}}";
+window.__THEME__ = "{{theme}}";
+</script>
+{{inlineLibs}}
+<script>{{controlsScript}}</script>
+<script>{{chartScript}}</script>
+</body>
+</html>

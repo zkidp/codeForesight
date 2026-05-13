@@ -1,8 +1,8 @@
 {
-  "name": "codepr",
-  "version": "0.1.0",
-  "description": "Requirement-driven progress board with three-layer token/effort estimator and design-vs-implementation diff view.",
-  "author": "codePR",
+  "name": "codeforesight",
+  "version": "0.4.0",
+  "description": "PRD-driven progress board with up-front token/effort estimation, design↔implementation diff, and self-contained HTML reports.",
+  "author": "codeForesight",
   "commands": "./commands",
   "hooks": "./hooks/hooks.json",
   "statusLine": {

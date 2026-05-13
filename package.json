@@ -1,9 +1,11 @@
 {
-  "name": "codepr",
-  "version": "0.1.0",
-  "description": "Claude Code plugin: requirement-driven progress board with three-layer token/effort estimator and design-vs-implementation diff view.",
+  "name": "codeforesight",
+  "version": "0.4.0",
+  "description": "Claude Code plugin: PRD-driven progress board with up-front token/effort estimation, design↔implementation diff, and self-contained HTML reports.",
   "type": "module",
   "bin": {
+    "codeforesight": "./bin/codepr.js",
+    "cf": "./bin/codepr.js",
     "codepr": "./bin/codepr.js"
   },
   "scripts": {

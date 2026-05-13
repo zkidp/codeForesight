@@ -1,14 +1,15 @@
-# codePR 开发进度
+# codeForesight 开发进度
 
-> 记录已完成的工作，按里程碑分阶段。当前到 v0.2 完成。
+> 记录已完成的工作，按里程碑分阶段。**当前到 v0.4 完成**（v0.1 雏形 → v0.2 图表 → v0.3 HTML 报告 → v0.4 项目级 + 合图 + 快照 + embedding + rebrand + i18n + 主题）。
 
 ## 项目定位
 
 **Claude Code 原生插件 + PRD 驱动的需求看板 + 三层结合的事前估算引擎 + 设计↔实现对照视图 + 图文并茂的项目进度可视化**。
 
-差异化于 GitHub 上其他 Claude Code 周边工具的两个抓手：
-1. **事前估算**：在新需求录入瞬间给出 token + 工时区间，而非事后回看
+差异化于 GitHub 上其他 Claude Code 周边工具的三个抓手：
+1. **事前估算（Foresight）**：在新需求录入瞬间给出 token + 工时区间，而非事后回看
 2. **设计↔实现 diff**：PRD 用 frontmatter 声明预期组件，scanner 检测真实代码缺口
+3. **自包含 HTML 报告**：图文结合、可分享、离线可用，覆盖 PR comment / 邮件 / Wiki 场景
 
 ---
 
@@ -188,6 +189,210 @@ Gantt:
 
 ---
 
+## v0.3 — 自包含 HTML 报告（已完成）
+
+落地了"图文结合"的核心人类接触面：单需求级 HTML 报告，离线可用、可贴 PR / 邮件 / Wiki。
+
+### 报告模块 [src/report/](../src/report/)
+
+| 文件 | 职责 |
+|---|---|
+| [templates/req.html](../src/report/templates/req.html) | 单需求 HTML 模板，`{{slot}}` 占位符替换 |
+| [templates/styles.css](../src/report/templates/styles.css) | 暗色主题，inline 进 `<style>` 标签 |
+| [snippets.js](../src/report/snippets.js) | 给定 file+symbol 抽 5-15 行代码片段 + 简易语法高亮（keyword / string / comment / function name） |
+| [mermaid-static.js](../src/report/mermaid-static.js) | 把 ```` ```mermaid ```` 块转 `<div class="mermaid">`；给 audit 架构图节点附加状态映射，浏览器端着色 |
+| [narrative.js](../src/report/narrative.js) | 调 Claude Haiku 写 3 段叙事；哈希缓存到 `.codepr/cache/narratives/`；无 API key 时启发式降级 |
+| [minimal-md.js](../src/report/minimal-md.js) | 极简 Markdown→HTML（headers / lists / task lists / tables / fenced / inline），零依赖 |
+| [generator.js](../src/report/generator.js) | 编排：load req → parse PRD → audit → burnup → narrative → inline assets → 拼模板 → 写盘 |
+| [inline-assets.js](../src/report/inline-assets.js) | fetch CDN 脚本缓存到 `.codepr/cache/assets/`，inline 进 HTML 实现真正自包含 |
+
+### 入口
+
+- [bin/codepr.js](../bin/codepr.js) 新增 `report <id>` 子命令（支持 `--force` 跳过缓存、`--no-network` 不调网络）
+- [commands/report.md](../commands/report.md) 新 slash command
+
+### 报告内容（7 个 section，从上到下）
+
+1. **头部摘要卡**：reqId + 标题 + status/priority/progress chips + 4 块统计（估算 token / 实际 token / 估算工时 / 完成度），颜色按超 budget / 命中区间动态变化
+2. **AI 叙事总结**：3 段（当前状态 / 设计↔实现差距 / 下一步建议），紫色标签强调
+3. **PRD 富渲染**：Markdown + 内嵌 Mermaid（浏览器端渲染）+ GFM 任务清单状态
+4. **设计↔实现对照**：4 张统计卡 + 架构图节点按状态着色（绿/红/黄）+ 4 张清单表（路由 / handlers / hooks / models）
+5. **Token Burnup 图**：Chart.js inline 渲染，数据 inline 在 `window.__CODEPR_DATA__`
+6. **关键代码片段**：已实现 handler 各截 5-15 行带高亮
+7. **底部元信息**：codepr 版本 + 生成时间 + 数据快照时间
+
+### 自包含验证
+
+```
+$ codepr report req-001
+✅ generated: .codepr/reports/req-001.html
+   narrative source: heuristic
+   inlined runtime: 3541 KB (offline-capable)
+
+$ wc -c .codepr/reports/req-001.html
+3,756,156
+
+$ grep -oE 'src="https?://[^"]+"' .codepr/reports/req-001.html
+(空 — 零外部依赖)
+```
+
+- 单文件 3.76 MB（含 Chart.js / Luxon / Adapter / Mermaid runtime 全部 inline）
+- 拷到陌生机器 / 断网 / 邮件附件均可正常打开
+- 第二次生成 **188ms**（资产缓存 7 天 TTL，AI 叙事按内容 hash）
+
+### 缓存命中机制
+
+| 缓存类型 | 位置 | 命中条件 |
+|---|---|---|
+| 静态资产 | `.codepr/cache/assets/{chart,luxon,adapter,mermaid}.js` | 文件存在且 mtime < 7 天 |
+| AI 叙事 | `.codepr/cache/narratives/<reqId>-<hash>.json` | hash = sha256(reqId + status + progress + tokens + prd长度 + audit计数) 前 12 字符 |
+
+### 实测尺寸明细
+
+| 资产 | 体积 | 占比 |
+|---|---|---|
+| mermaid.min.js | 3.3 MB | 88% |
+| chart.js | 208 KB | 5% |
+| luxon.js | 82 KB | 2% |
+| chartjs-adapter-luxon | 1.8 KB | <1% |
+| 报告自身（HTML + CSS + 数据） | ~165 KB | 4% |
+
+---
+
+## v0.4 — Rebrand + 项目级 + 合图 + 快照 + Embedding + i18n + 主题（已完成）
+
+v0.4 是一次大整合：把 codePR rebrand 为 **codeForesight**，并把项目级形态、跨需求合图、时间维度（快照 diff）、语义校准（embedding）、国际化与主题都做齐。
+
+### 4-A Rebrand 到 codeForesight
+
+| 文件 | 变化 |
+|---|---|
+| [package.json](../package.json) | `name: codeforesight`，bin 三别名 `codeforesight` / `cf` / `codepr`（兼容旧用法） |
+| [.claude-plugin/plugin.json](../.claude-plugin/plugin.json) | name + author + version v0.4 |
+| [README.md](../README.md) | 全面重写，凸显 "Foresight" 差异化 |
+| 所有面向用户的字符串 | 引用从 `codepr` 改为 `codeforesight` |
+
+### 4-B 项目级 HTML 报告 `codeforesight report --all`
+
+复用 v0.3 自包含管道，扩展到项目维度：
+
+| 新增文件 | 职责 |
+|---|---|
+| [src/report/templates/project.html](../src/report/templates/project.html) | 项目级模板（头部 + 叙事 + 4 张图 + 架构合图 + 需求卡片） |
+| [src/report/templates/project-charts.js](../src/report/templates/project-charts.js) | 独立 IIFE 脚本，从 `window.__CODEPR_DATA__` 渲染 4 张项目图，跟随主题切换重绘 |
+| [src/report/generator.js](../src/report/generator.js) 的 `generateProjectReport()` | 项目级编排器，复用 inline-assets / narrative 缓存 |
+| [src/report/narrative.js](../src/report/narrative.js) 的 `buildProjectNarrative()` | 项目级 AI 叙事（overview / risks / next_steps），按内容 hash 缓存 |
+
+实测：单文件 3.87 MB，零外部依赖，第二次生成 ~170ms（缓存命中）。
+
+### 4-C Mermaid 合图（项目级架构）
+
+| 新增文件 | 职责 |
+|---|---|
+| [src/report/mermaid-merger.js](../src/report/mermaid-merger.js) | 解析所有 PRD 的 flowchart 块，合并为单图 |
+
+支持的语法范围：
+- `flowchart` / `graph` 类型（带方向 LR/TD 等）
+- 节点形状 `id`/`id[Label]`/`id{Label}`/`id(Label)`/`id((Label))`
+- 箭头 `-->`/`---`/`-.->`/`==>`/`-- text -->`/`-->|text|`
+- subgraph 剥壳保内，sequenceDiagram 等非 flow 类型跳过
+
+合并算法：
+- **同名节点合并**：跨需求引用同一组件时自动归集，标签后加 `〔req-001, req-003, …〕` 标注来源
+- **边去重**：相同 `(from, to)` 仅保留一条
+- **跨需求状态着色**：worst-state 优先（`missing > deviation > matched`），通过 mermaid `classDef mm-*` 实现
+
+实测：codeForesight 自己 7 个 PRD 合成 **36 节点 + 33 边**，自动识别 `PRD` / `Parser` / `Estimator` / `Diff` 等概念在多个 PRD 间的复用。
+
+### 4-D 历史快照 + diff
+
+| 新增文件 | 职责 |
+|---|---|
+| [src/report/snapshots.js](../src/report/snapshots.js) | 归档当前状态 / 列出快照 / 数据 diff |
+| [hooks/stop.js](../hooks/stop.js) 升级 | req 转 done 时自动触发快照 |
+
+快照目录结构：
+
+```
+.codepr/snapshots/<ISO>/
+  ├── index.html     # 完整项目报告
+  └── data.json      # requirements + history 当时状态（diff 用）
+```
+
+**数据 diff 独立于 HTML 模板** — 即使报告样式以后改了，旧快照永远能正确 diff。
+
+新 CLI：
+- `codeforesight snapshot list` — 列出所有快照
+- `codeforesight snapshot now` — 手动归档当前状态
+- `codeforesight diff <ts1> <ts2>` — 结构化对比两份快照（reqs 增减 / 状态变化 / token Δ / progress Δ）
+
+支持 timestamp 前缀匹配（`codeforesight diff 2026-05-13T17:20:01 2026-05-13T17:20:17` 即可）。
+
+### 4-E 估算校准强化 — Embedding 替换 Jaccard
+
+| 新增文件 | 职责 |
+|---|---|
+| [src/estimator/embeddings.js](../src/estimator/embeddings.js) | Voyage AI / OpenAI embedding 调用 + 内容哈希缓存 |
+| [src/estimator/history.js](../src/estimator/history.js) 升级 | 异步化，优先用 cosine 相似度，无 API key 时降级回 Jaccard |
+| [src/estimator/combine.js](../src/estimator/combine.js) 升级 | `Promise.all([history, ai])` 并行，时延不变 |
+
+Provider 优先级：
+1. `VOYAGE_API_KEY` → Voyage AI `voyage-3-lite`（Anthropic 推荐伙伴）
+2. `OPENAI_API_KEY` → OpenAI `text-embedding-3-small`
+3. 无 key → 自动降级 Jaccard（无错误打断）
+
+Embedding 按 sha256 内容哈希缓存到 `.codepr/cache/embeddings/`，命中后零成本。相似度公式：`0.8 * cosine + 0.2 * tag_jaccard`。
+
+### 4-F 国际化（中英文）
+
+| 新增文件 | 职责 |
+|---|---|
+| [src/i18n/index.js](../src/i18n/index.js) | `t(key, params)` 函数 + 语言探测 |
+| [src/i18n/locales/zh.json](../src/i18n/locales/zh.json) | 中文（约 200 条） |
+| [src/i18n/locales/en.json](../src/i18n/locales/en.json) | 英文（约 200 条） |
+
+覆盖范围：CLI 输出、Dashboard UI、5 张图表的所有标题/图例/tooltip、报告 7 个 section、AI 叙事段落标签。
+
+语言探测优先级：`--lang` 参数 → `CODEFORESIGHT_LANG` env → `LANG` 系统 locale → 默认 zh。浏览器端 toggle 即时切换，偏好存 `localStorage`。
+
+### 4-G 主题（跟随 Claude Code）
+
+| 新增文件 | 职责 |
+|---|---|
+| [src/report/cc-settings.js](../src/report/cc-settings.js) | 读 `~/.claude/settings.json` 的 `theme` 字段（dark/light/system） |
+| [src/report/templates/controls.js](../src/report/templates/controls.js) | 报告内的语言/主题 toggle 浏览器脚本 |
+
+CSS 全面变量化：20+ 个 `--bg` / `--text` / `--accent` / `--success` / `--danger` 等变量，dark + light 两套同结构，切换主题只换变量值。
+
+切换路径：
+- **报告**：生成时读 CC 默认主题；HTML 内嵌两套 CSS；右上角 🌙/☀️ 即时切换；图表通过 `getComputedStyle()` 读 CSS 变量自动跟随
+- **Dashboard**：`/api/settings` 返回 CC 主题；前端用 Proxy 包装颜色对象，每次绘图自动从 CSS 变量重读
+- 用户偏好存 `localStorage.codeforesight.theme`，覆盖 CC 默认
+
+### 4-H Dogfood — codeForesight 自身的开发历程
+
+把之前的 demo PRDs（user-login / payment）替换为真实的 codeForesight 开发里程碑：
+
+| PRD | 对应版本 | 状态 |
+|---|---|---|
+| [001-foundation.md](../docs/prd/001-foundation.md) | v0.1 基础雏形 | done · 82k tokens · 16h |
+| [002-charts-suite.md](../docs/prd/002-charts-suite.md) | v0.2 图表套件 | done · 58k · 12h |
+| [003-html-reports.md](../docs/prd/003-html-reports.md) | v0.3 自包含 HTML 报告 | done · 71k · 14h |
+| [004-project-reports.md](../docs/prd/004-project-reports.md) | v0.4 项目级报告 | done · 38k · 8h |
+| [005-mermaid-merger.md](../docs/prd/005-mermaid-merger.md) | v0.4 合图 | done · 28k · 3.5h |
+| [006-snapshots.md](../docs/prd/006-snapshots.md) | v0.4 快照 + diff | done · 22k · 2.5h |
+| [007-embeddings.md](../docs/prd/007-embeddings.md) | v0.4 embedding 升级 | done · 31k · 2h |
+
+`codeforesight seed-real` 命令可一键还原这套示例数据 — 其他人 clone 后能直接看到一个"用 codeForesight 跟踪 codeForesight 自身开发"的完整 demo。
+
+### 4-I 修复 — 报告"代码暴露"问题
+
+- req-card 摘要剥离逻辑修复：之前 ```` ```mermaid ```` 围栏会作为字面字符串漏到摘要里；现在用 `extractPlainSummary()` 按顺序剥离 fenced code → inline code → headers → 列表标记 → 链接 → 加粗斜体
+- 占位符保留：`<ts>` / `<id>` 不再被当 HTML 标签删掉
+- 架构图去重：之前同一张 mermaid 在「PRD 设计文档」section 和「设计↔实现对照」section 渲染两次；现在合并为一次渲染并直接在 PRD section 内附加状态着色（`data-mm-states`）
+
+---
+
 ## 关键设计决策
 
 ### 与红海工具的差异化
@@ -231,10 +436,11 @@ codePR/
 │   └── plugin.json
 ├── bin/
 │   └── codepr.js                  # 统一 CLI 入口
-├── commands/                      # 6 个 slash commands
+├── commands/                      # 7 个 slash commands
 │   ├── audit.md
 │   ├── estimate.md
 │   ├── progress.md
+│   ├── report.md                  # ★ v0.3 新增
 │   ├── req.md
 │   ├── scaffold.md
 │   └── sync.md
@@ -261,11 +467,6 @@ codePR/
 │   │       ├── charts.js          # 5 个绘图函数
 │   │       ├── index.html
 │   │       └── style.css
-│   ├── estimator/
-│   │   ├── ai.js
-│   │   ├── combine.js
-│   │   ├── history.js
-│   │   └── rules.js
 │   ├── scanner/
 │   │   ├── db.js
 │   │   ├── diff.js
@@ -273,6 +474,33 @@ codePR/
 │   │   ├── hooks.js
 │   │   ├── routes.js
 │   │   └── walk.js
+│   ├── report/                    # ★ v0.3 + v0.4
+│   │   ├── cc-settings.js         # v0.4: 读 ~/.claude/settings.json 主题
+│   │   ├── generator.js           # v0.3 单需求 + v0.4 项目级
+│   │   ├── inline-assets.js
+│   │   ├── mermaid-merger.js      # v0.4: 跨 PRD 合图
+│   │   ├── mermaid-static.js
+│   │   ├── minimal-md.js
+│   │   ├── narrative.js           # v0.3 单需求 + v0.4 项目级叙事
+│   │   ├── snapshots.js           # v0.4: 历史快照 + diff
+│   │   ├── snippets.js
+│   │   └── templates/
+│   │       ├── controls.js        # v0.4: 浏览器端 lang/theme toggle
+│   │       ├── project-charts.js  # v0.4: 项目报告内嵌图表绘制
+│   │       ├── project.html       # v0.4: 项目级模板
+│   │       ├── req.html
+│   │       └── styles.css         # v0.4: CSS 变量化双主题
+│   ├── i18n/                      # ★ v0.4 新增
+│   │   ├── index.js
+│   │   └── locales/
+│   │       ├── en.json
+│   │       └── zh.json
+│   ├── estimator/
+│   │   ├── ai.js
+│   │   ├── combine.js
+│   │   ├── embeddings.js          # v0.4: Voyage/OpenAI embedding + 缓存
+│   │   ├── history.js             # v0.4: 异步化 + cosine 相似度
+│   │   └── rules.js
 │   ├── jsonl-parser.js
 │   ├── paths.js
 │   ├── prd-parser.js
@@ -292,5 +520,8 @@ codePR/
 ├── history.jsonl         # 已完成需求的校准库
 ├── config.json           # 估算系数、PRD 目录等
 ├── active-req            # 当前活跃需求 id（单行文本）
-└── reports/              # （v0.3 起）HTML 报告输出
+├── cache/
+│   ├── assets/           # Chart.js / Luxon / Mermaid 缓存（7 天 TTL）
+│   └── narratives/       # AI 叙事缓存，按内容 hash
+└── reports/              # HTML 报告输出
 ```

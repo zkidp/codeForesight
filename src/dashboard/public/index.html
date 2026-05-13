@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh" data-theme="dark">
 <head>
 <meta charset="utf-8" />
-<title>codePR — Project Progress</title>
+<title>codeForesight — Project Progress</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <link rel="stylesheet" href="/style.css" />
 <script src="https://cdn.jsdelivr.net/npm/markdown-it@13/dist/markdown-it.min.js"></script>
@@ -14,21 +14,27 @@
 </head>
 <body>
 <header>
-  <div class="brand">📋 codePR</div>
+  <div class="brand">📋 codeForesight</div>
   <div class="topstats">
-    <span id="topReqCount">0 reqs</span>
-    <span id="topTokens">0 / 0 tok</span>
-    <span id="topAccuracy">accuracy: —</span>
+    <span id="topReqCount">—</span>
+    <span id="topTokens">—</span>
+    <span id="topAccuracy">—</span>
+    <span class="ctrls">
+      <button class="lang-btn" data-lang="zh">中</button>
+      <button class="lang-btn" data-lang="en">EN</button>
+      <button class="theme-btn" data-theme="dark">🌙</button>
+      <button class="theme-btn" data-theme="light">☀️</button>
+    </span>
   </div>
 </header>
 <nav class="topnav">
-  <div class="navtab" data-view="overview">📊 Overview</div>
-  <div class="navtab active" data-view="reqs">📋 Requirements</div>
+  <div class="navtab" data-view="overview" data-i18n="dashboard.nav.overview">📊 Overview</div>
+  <div class="navtab active" data-view="reqs" data-i18n="dashboard.nav.requirements">📋 Requirements</div>
 </nav>
 <main>
   <aside id="reqList"></aside>
   <section id="detail">
-    <div class="placeholder">Select a requirement on the left.</div>
+    <div class="placeholder" data-i18n="dashboard.empty.select_req">Select a requirement on the left.</div>
   </section>
 </main>
 <section id="overview" class="overview-view" hidden>

@@ -4,8 +4,10 @@ import { estimateByAI } from './ai.js';
 
 export async function estimate(prd, repo, config, opts = {}) {
   const rules = estimateByRules(prd, config);
-  const history = estimateByHistory(prd, repo);
-  const ai = await estimateByAI(prd, repo, opts);
+  const [history, ai] = await Promise.all([
+    estimateByHistory(prd, repo, opts),
+    estimateByAI(prd, repo, opts)
+  ]);
 
   const layers = { rules, history, ai };
   const usableHistory = history.tokens && history.hours;
