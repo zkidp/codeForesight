@@ -424,9 +424,48 @@ for (const el of document.querySelectorAll('.topnav .navtab')) {
   el.onclick = () => setView(el.dataset.view);
 }
 
-// 启动顺序：先取 lang + theme + locales，再做首次刷新
+// SSE 实时推送：hook 写文件 → 服务器 fs.watch → 推送 → dashboard 立即刷新
+// 失败时降级为 5 秒轮询
+let sseRef = null;
+let pollTimer = null;
+let lastEventAt = 0;
+
+function connectSSE() {
+  try {
+    sseRef = new EventSource('/api/events');
+    sseRef.onmessage = (e) => {
+      lastEventAt = Date.now();
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'change') refreshAll();
+      } catch {}
+    };
+    sseRef.onerror = () => {
+      // 连接断开时降级到轮询
+      try { sseRef?.close(); } catch {}
+      sseRef = null;
+      if (!pollTimer) pollTimer = setInterval(refreshAll, 5000);
+      // 5s 后尝试重连
+      setTimeout(() => {
+        if (!sseRef) {
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          connectSSE();
+        }
+      }, 5000);
+    };
+  } catch {
+    // 浏览器不支持 EventSource —— 永久降级
+    if (!pollTimer) pollTimer = setInterval(refreshAll, 5000);
+  }
+}
+
+// 启动顺序：先取 lang + theme + locales，再做首次刷新，最后接 SSE
 (async () => {
   await bootSettings();
   await refreshAll();
-  setInterval(refreshAll, 5000);
+  connectSSE();
+  // 兜底：30 秒强制刷新一次，避免 SSE 漏推
+  setInterval(() => {
+    if (Date.now() - lastEventAt > 30_000) refreshAll();
+  }, 30_000);
 })();

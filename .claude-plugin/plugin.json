@@ -1,10 +1,11 @@
 {
   "name": "codeforesight",
-  "version": "0.4.0",
-  "description": "PRD-driven progress board with up-front token/effort estimation, design↔implementation diff, and self-contained HTML reports.",
+  "version": "0.4.1",
+  "description": "PRD-driven progress board with up-front token/effort estimation, design↔implementation diff, self-contained HTML reports, live SSE dashboard, and 4 proactive skills.",
   "author": "codeForesight",
   "commands": "./commands",
   "hooks": "./hooks/hooks.json",
+  "skills": "./skills",
   "statusLine": {
     "type": "command",
     "command": "node ${CLAUDE_PLUGIN_ROOT}/statusline.js",

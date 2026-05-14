@@ -1,6 +1,6 @@
 {
   "name": "codeforesight",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Claude Code plugin: PRD-driven progress board with up-front token/effort estimation, design↔implementation diff, and self-contained HTML reports.",
   "type": "module",
   "bin": {

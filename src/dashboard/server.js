@@ -25,9 +25,52 @@ const MIME = {
 
 const auditCache = new Map();
 
+// SSE client registry — every active EventSource sub
+const sseClients = new Set();
+let watcherStarted = false;
+
+function broadcastEvent(payload) {
+  const data = `data: ${JSON.stringify({ ts: new Date().toISOString(), ...payload })}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(data); } catch {}
+  }
+}
+
+function startWatcher() {
+  if (watcherStarted) return;
+  const p = paths(repo);
+  if (!fs.existsSync(p.base)) {
+    fs.mkdirSync(p.base, { recursive: true });
+  }
+  // Coalesce bursts (hooks may write 2-3 files in quick succession)
+  let pending = null;
+  const schedule = (kind, file) => {
+    if (pending) clearTimeout(pending);
+    pending = setTimeout(() => {
+      pending = null;
+      // Bust audit cache so dashboard re-runs scanner on next pull
+      auditCache.clear();
+      broadcastEvent({ type: 'change', source: kind, file });
+    }, 120);
+  };
+  try {
+    fs.watch(p.base, { persistent: false }, (eventType, filename) => {
+      if (!filename) return;
+      if (filename === 'requirements.json' || filename === 'events.jsonl' || filename === 'history.jsonl' || filename === 'active-req') {
+        schedule(filename, filename);
+      }
+    });
+    watcherStarted = true;
+    console.log(`codeforesight: watching ${p.base} for live updates`);
+  } catch (e) {
+    console.warn('codeforesight: fs.watch failed — dashboard will fall back to polling:', e.message);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${port}`);
+    if (url.pathname === '/api/events') return handleSSE(req, res);
     if (url.pathname.startsWith('/api/')) return handleApi(url, res);
     return serveStatic(url.pathname, res);
   } catch (e) {
@@ -35,6 +78,27 @@ const server = http.createServer(async (req, res) => {
     res.end(String(e.stack || e.message));
   }
 });
+
+function handleSSE(req, res) {
+  startWatcher();
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    'connection': 'keep-alive',
+    'access-control-allow-origin': '*'
+  });
+  res.write(`: connected\n\n`);
+  res.write(`data: ${JSON.stringify({ ts: new Date().toISOString(), type: 'hello' })}\n\n`);
+  sseClients.add(res);
+  // Keep alive ping every 25s (some proxies idle out at 30s)
+  const keepalive = setInterval(() => {
+    try { res.write(`: ping\n\n`); } catch {}
+  }, 25_000);
+  req.on('close', () => {
+    clearInterval(keepalive);
+    sseClients.delete(res);
+  });
+}
 
 function handleApi(url, res) {
   const send = (status, body) => {
@@ -133,5 +197,6 @@ function serveStatic(pathname, res) {
 }
 
 server.listen(port, () => {
-  console.log(`codepr dashboard: http://localhost:${port} (repo: ${repo})`);
+  console.log(`codeforesight dashboard: http://localhost:${port} (repo: ${repo})`);
+  startWatcher();
 });
